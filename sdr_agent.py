@@ -1,3 +1,4 @@
+import os
 import anthropic
 import requests
 import json
@@ -95,7 +96,7 @@ MANUS_API_KEY = os.environ.get("MANUS_API_KEY")
 HUBSPOT_API_KEY = os.environ.get("HUBSPOT_API_KEY")
 
 # HubSpot Rep IDs for round robin
-SALES_REPS = ["86078331","91693063"]
+SALES_REPS = ["25610771","13068076"]
 rep_counter = 0
 
 def get_next_rep():
@@ -109,7 +110,7 @@ def create_manus_task(company):
     """Send company to Manus for deep research"""
     log.info(f"Creating Manus task for {company['name']}")
     
-    prompt = f"""You are a B2B sales researcher for AnyCard, a gift card solutions company.
+    prompt = f"""You are a B2B sales researcher for Birchmount Network, a gift card solutions company specializing in regulated and specialty retail industries including cannabis, wineries, nightclubs, tobacco stores and similar businesses.
 
 We already have this contact from Apollo:
 Contact: {company['first_name']} {company['last_name']}, {company['title']}
@@ -235,7 +236,7 @@ def claude_qualify(company, manus_research):
     
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     
-    prompt = f"""You are an expert SDR analyst for AnyCard, Our platform provides enterprise-grade gift card processing, a centralized cloud promotion engine (SMS/Email balance notifications), B2B/B2C distribution networks, and seamless e-commerce hosting that protects merchants from chargeback liability.
+    prompt = f"""You are an expert SDR analyst for Birchmount Network, a gift card solutions company specializing in cannabis, wineries, nightclubs, tobacco and specialty retail, Our platform provides enterprise-grade gift card processing, a centralized cloud promotion engine (SMS/Email balance notifications), B2B/B2C distribution networks, and seamless e-commerce hosting that protects merchants from chargeback liability.
 
     ## VALUE PROPOSITIONS TO REFERENCE:
 Expanding into modern e-commerce channels drives up to a 36% increase in gift card sales.
@@ -280,6 +281,7 @@ Return ONLY this JSON — no markdown, no backticks, start with {{ end with }}:
   "priority": "High/Medium/Low",
   "intent_score": 1 to 10 based on growth signals and tech investments,
   "intent_signals": "specific dated signals or Unable to verify",
+  "compliance_notes": "any regulatory considerations for gift cards in their state/province",
   "company_profile": {{
     "years_in_business": "value or Unable to verify",
     "locations": "value or Unable to verify",
@@ -369,10 +371,10 @@ def create_hubspot_contact(contact, assessment, company, rep_id):
             "jobtitle": contact.get('title', ''),
             "company": company.get('name'),
             "website": company.get('website'),
-            "lead_source": "AI Agent",
+            "contact_source": "AI Agent",
             "hubspot_owner_id": rep_id,
-            "fit_scoreai": assessment.get('fit_score', ''),
-            "pos": assessment.get('technology', {}).get('pos_system', ''),
+            "fit_score": assessment.get('fit_score', ''),
+            "current_pos_system": assessment.get('technology', {}).get('pos_system', ''),
             "gift_card_provider": assessment.get('gift_card_analysis', {}).get('experience_quality', '')
         }
     }

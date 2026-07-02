@@ -1,0 +1,7 @@
+2026-07-02 18:17:04,564 - INFO - SDR Agent starting...
+2026-07-02 18:17:04,679 - INFO - Found 2 unprocessed companies
+2026-07-02 18:17:04,680 - INFO - Creating Manus task for Southern Ohio Botanicals
+2026-07-02 18:17:06,145 - ERROR - Failed to process Southern Ohio Botanicals: Manus task creation failed: {'error': {'code': 'unauthenticated', 'message': 'missing authentication: require either API Key or Bearer Token'}, 'ok': False, 'request_id': '7feef1e3f752ed711bdacadf11b5a409'}
+2026-07-02 18:17:06,149 - INFO - Creating Manus task for Token Farms
+2026-07-02 18:17:06,493 - ERROR - Failed to process Token Farms: Manus task creation failed: {'error': {'code': 'unauthenticated', 'message': 'missing authentication: require either API Key or Bearer Token'}, 'ok': False, 'request_id': 'e4fd0d414e848fe91209f68d30518e69'}
+2026-07-02 18:17:06,495 - INFO - Run complete — 0 succeeded, 2 failed

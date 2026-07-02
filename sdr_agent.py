@@ -96,7 +96,7 @@ MANUS_API_KEY = os.environ.get("MANUS_API_KEY")
 HUBSPOT_API_KEY = os.environ.get("HUBSPOT_API_KEY")
 
 # HubSpot Rep IDs for round robin
-SALES_REPS = ["25610771","13068076"]
+SALES_REPS = ["91727520","57064994"]
 rep_counter = 0
 
 def get_next_rep():

@@ -555,7 +555,7 @@ if __name__ == "__main__":
     log.info("SDR Agent starting...")
     
     filename = 'birchmount-apollo-contacts.csv'
-    companies, all_rows = get_unprocessed_companies(filename, limit=2)
+    companies, all_rows = get_unprocessed_companies(filename, limit=30)
     
     log.info(f"Found {len(companies)} unprocessed companies")
     

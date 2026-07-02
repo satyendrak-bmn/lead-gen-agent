@@ -419,6 +419,9 @@ def create_hubspot_task(contact_id, contact, assessment, company, rep_id):
     notes = f"""Score: {assessment.get('fit_score', '')}
 Confidence Level: {assessment.get('confidence_level', '')}
 
+COMPLIANCE NOTES:
+{assessment.get('compliance_notes', '')}
+
 Summary:
 {assessment.get('account_summary', '')}
 
@@ -456,6 +459,8 @@ Experience Quality: {assessment.get('gift_card_analysis', {}).get('experience_qu
 Has Gift Cards: {assessment.get('gift_card_analysis', {}).get('has_gift_cards', '')}
 Corporate Gifting: {assessment.get('gift_card_analysis', {}).get('corporate_gifting', '')}
 Balance Checker: {assessment.get('gift_card_analysis', {}).get('balance_checker', '')}
+License States: {assessment.get('company_profile', {}).get('license_states', '')}
+Operator Type: {assessment.get('company_profile', {}).get('operator_type', '')}
 
 Technology:
 POS System: {assessment.get('technology', {}).get('pos_system', '')}
@@ -549,7 +554,7 @@ def process_company(company):
 if __name__ == "__main__":
     log.info("SDR Agent starting...")
     
-    filename = 'apollo-contacts-export.csv'
+    filename = 'birchmount-apollo-contacts.csv'
     companies, all_rows = get_unprocessed_companies(filename, limit=50)
     
     log.info(f"Found {len(companies)} unprocessed companies")

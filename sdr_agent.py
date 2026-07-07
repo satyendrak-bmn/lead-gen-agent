@@ -16,21 +16,21 @@ def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=50):
             processed = set(line.strip() for line in f)
     except FileNotFoundError:
         pass
-    
+
     companies = []
-    
+
     with open(filename, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         all_rows = list(reader)
-    
+
     for i, row in enumerate(all_rows):
         company_name = row.get('Company Name', '')
-        
+
         if company_name in processed:
             continue
         if row.get('Proceed', '').strip().lower() in ('done', 'exists'):
             continue
-        
+
         company = {
             'first_name': row.get('First Name', ''),
             'last_name': row.get('Last Name', ''),
@@ -47,14 +47,16 @@ def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=50):
             'technologies': row.get('Technologies', ''),
             'linkedin_company': row.get('Company Linkedin Url', ''),
             'phone': row.get('Work Direct Phone', ''),
+            'company_state': row.get('Company State', ''),
+            'company_country': row.get('Company Country', ''),
             'row_index': i
         }
-        
+
         companies.append(company)
-        
+
         if len(companies) >= limit:
             break
-    
+
     return companies, all_rows
 
 def mark_company_processed(filename, all_rows, row_index, status='done'):
@@ -95,21 +97,65 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 MANUS_API_KEY = os.environ.get("MANUS_API_KEY")
 HUBSPOT_API_KEY = os.environ.get("HUBSPOT_API_KEY")
 
-# HubSpot Rep IDs for round robin
-SALES_REPS = ["91727520","57064994"]
-rep_counter = 0
+# HubSpot Rep IDs
+EVELYN = "91727520"
+ERICA = "57064994"
 
-def get_next_rep():
-    """Round robin rep assignment"""
-    global rep_counter
-    rep = SALES_REPS[rep_counter % len(SALES_REPS)]
-    rep_counter += 1
-    return rep
+# US state -> rep, based on company location (Company State / Company Country)
+# Any US state not listed here defaults to Erica. All Canada goes to Evelyn.
+STATE_REP_MAP = {
+    "Massachusetts": EVELYN,
+    "Maine": ERICA,
+    "New Jersey": EVELYN,
+    "New York": EVELYN,
+    "District of Columbia": ERICA,
+    "Vermont": EVELYN,
+    "Alaska": ERICA,
+    "Connecticut": EVELYN,
+    "Oklahoma": ERICA,
+    "South Dakota": ERICA,
+    "Maryland": EVELYN,
+    "Michigan": EVELYN,
+    "Ohio": EVELYN,
+    "Illinois": EVELYN,
+    "Missouri": EVELYN,
+    "Minnesota": ERICA,
+    "California": ERICA,
+    "Nevada": ERICA,
+    "Oregon": ERICA,
+    "Hawaii": ERICA,
+    "New Mexico": ERICA,
+    "Arizona": ERICA,
+    "Colorado": ERICA,
+    "Washington": ERICA,
+    "Montana": ERICA,
+    "Virginia": EVELYN,
+    "West Virginia": EVELYN,
+    "Florida": EVELYN,
+    "Mississippi": ERICA,
+    "Pennsylvania": EVELYN,
+}
+
+def get_rep_for_company(company):
+    """Assign a sales rep based on the company's state/province and country.
+    All Canada -> Evelyn. US -> per STATE_REP_MAP, defaulting to Erica if the
+    state isn't listed. Any other country also defaults to Erica."""
+    country = (company.get('company_country') or '').strip().lower()
+    state = (company.get('company_state') or '').strip()
+
+    if country == 'canada':
+        return EVELYN
+
+    if country == 'united states':
+        return STATE_REP_MAP.get(state, ERICA)
+
+    # Unrecognized/other country — fall back to Erica
+    return ERICA
 
 def create_manus_task(company):
     """Send company to Manus for deep research"""
     log.info(f"Creating Manus task for {company['name']}")
-    
+
     prompt = f"""You are a B2B sales researcher for Birchmount Network, a gift card solutions company specializing in regulated and specialty retail industries including cannabis, wineries, nightclubs, tobacco stores and similar businesses.
 
 We already have this contact from Apollo:
@@ -142,7 +188,7 @@ Your research tasks:
 - LinkedIn URL
 - Direct email if publicly available (check their LinkedIn, company website team page, press releases)
 - Direct phone if publicly available (check company website, LinkedIn, ZoomInfo snippets, Clutch profiles, Google Business)
-- Why they are the right contact for AnyCard
+- Why they are the right contact for Birchmount
 
 For phone numbers specifically — check:
 - Company website contact/team page
@@ -184,14 +230,14 @@ Return all findings as plain text. Do not create files or attachments."""
             "agent_profile": "manus-1.6-lite"
         }
     )
-    
+
     data = response.json()
     if not data.get('ok'):
         error_code = data.get('error', {}).get('code', '')
         if error_code in ['payment_required', 'insufficient_credits', 'quota_exceeded']:
             raise Exception(f"MANUS_OUT_OF_CREDITS: {data}")
         raise Exception(f"Manus task creation failed: {data}")
-    
+
     return data['task_id']
 
 def poll_manus_until_complete(task_id, timeout=900):
@@ -199,7 +245,7 @@ def poll_manus_until_complete(task_id, timeout=900):
     log.info(f"Polling Manus task {task_id}")
     start_time = time.time()
     attempt = 0
-    
+
     while time.time() - start_time < timeout:
         attempt += 1
         response = requests.get(
@@ -207,10 +253,10 @@ def poll_manus_until_complete(task_id, timeout=900):
             headers={"x-manus-api-key": MANUS_API_KEY},
             params={"task_id": task_id}
         )
-        
+
         data = response.json()
         messages = data.get('messages', [])
-        
+
         for message in messages:
             # Check correct Manus message structure
             if message.get('type') == 'assistant_message':
@@ -218,30 +264,30 @@ def poll_manus_until_complete(task_id, timeout=900):
                 if isinstance(content, str) and len(content) > 500:
                     log.info(f"Manus research complete - {len(content)} characters")
                     return content
-            
+
             # Check for error status
             if message.get('type') == 'status_update':
                 status = message.get('status_update', {}).get('agent_status', '')
                 if status == 'error':
                     raise Exception(f"Manus task failed: {message}")
-        
+
         log.info(f"Still waiting... attempt {attempt}, sleeping 30s")
         time.sleep(30)
-    
+
     raise Exception(f"Manus timed out after {timeout}s")
 
 def claude_qualify(company, manus_research):
     """Use Claude Opus to qualify and score the lead"""
     log.info(f"Running Claude qualification for {company['name']}")
-    
+
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    
+
     prompt = f"""You are an expert SDR analyst for Birchmount Network, a gift card solutions company specializing in cannabis, wineries, nightclubs, tobacco and specialty retail, Our platform provides enterprise-grade gift card processing, a centralized cloud promotion engine (SMS/Email balance notifications), B2B/B2C distribution networks, and seamless e-commerce hosting that protects merchants from chargeback liability.
 
     ## VALUE PROPOSITIONS TO REFERENCE:
 Expanding into modern e-commerce channels drives up to a 36% increase in gift card sales.
 35% of cardholders want frequent balance reminders, which our automated notification engine provides via SMS/Email to drive faster redemption.
-52% of businesses use gift cards for corporate rewards; AnyCard allows merchants to easily launch a B2B corporate distribution program.
+52% of businesses use gift cards for corporate rewards; Birchmount allows merchants to easily launch a B2B corporate distribution program.
 Pushing gift cards into digital wallets (Apple/Google) generates up to 31% more spend.
 
 
@@ -320,7 +366,7 @@ Return ONLY this JSON — no markdown, no backticks, start with {{ end with }}:
   }},
   "pain_points": "3 specific verified pain points",
   "account_summary": "2 paragraphs verified facts only",
-  "opportunity_assessment": "2 paragraphs AnyCard opportunity",
+  "opportunity_assessment": "2 paragraphs Birchmount opportunity",
   "outreach_angles": "Angle 1 | Angle 2 | Angle 3",
   "discovery_questions": "Q1 | Q2 | Q3 | Q4 | Q5",
   "executive_summary": "Why this score and whether to pursue",
@@ -335,33 +381,33 @@ Return ONLY this JSON — no markdown, no backticks, start with {{ end with }}:
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}]
     )
-    
+
     raw = response.content[0].text
     clean = raw.replace("```json", "").replace("```", "").strip()
-    
+
     import re
     json_match = re.search(r'\{.*\}', clean, re.DOTALL)
     if json_match:
         clean = json_match.group(0)
-    
+
     try:
         return json.loads(clean)
     except json.JSONDecodeError as e:
         log.error(f"JSON parse error: {e}")
         log.error(f"Raw response: {clean[:500]}")
         raise Exception(f"Claude returned invalid JSON: {e}")
-        
+
 
 def create_hubspot_contact(contact, assessment, company, rep_id):
     """Create a contact in HubSpot or return existing contact ID"""
     name_parts = contact.get('name', '').split(' ', 1)
     first_name = name_parts[0] if name_parts else ''
     last_name = name_parts[1] if len(name_parts) > 1 else ''
-    
+
     if not contact.get('name'):
         log.info(f"Skipping — no contact name found")
         return None
-    
+
     payload = {
         "properties": {
             "firstname": first_name,
@@ -378,7 +424,7 @@ def create_hubspot_contact(contact, assessment, company, rep_id):
             "gift_card_provider": assessment.get('gift_card_analysis', {}).get('experience_quality', '')
         }
     }
-    
+
     response = requests.post(
         "https://api.hubapi.com/crm/v3/objects/contacts",
         headers={
@@ -387,17 +433,17 @@ def create_hubspot_contact(contact, assessment, company, rep_id):
         },
         json=payload
     )
-    
+
     if response.status_code in [200, 201]:
         contact_id = response.json()['id']
         log.info(f"HubSpot contact created: {contact.get('name')} (ID: {contact_id})")
         return contact_id
-    
+
     elif response.status_code == 409:
         # Contact already exists — extract existing ID and still create task
         error_data = response.json()
         message = error_data.get('message', '')
-        
+
         # Extract existing contact ID from error message
         import re
         id_match = re.search(r'Existing ID: (\d+)', message)
@@ -408,14 +454,14 @@ def create_hubspot_contact(contact, assessment, company, rep_id):
         else:
             log.error(f"Contact exists but couldn't extract ID: {message}")
             return None
-    
+
     else:
         log.error(f"HubSpot contact creation failed: {response.text}")
         return None
 
 def create_hubspot_task(contact_id, contact, assessment, company, rep_id):
     """Create a follow-up task in HubSpot"""
-    
+
     notes = f"""Score: {assessment.get('fit_score', '')}
 Confidence Level: {assessment.get('confidence_level', '')}
 
@@ -488,7 +534,7 @@ Revenue: {assessment.get('company_profile', {}).get('revenue_range', '')}"""
             }
         ]
     }
-    
+
     response = requests.post(
         "https://api.hubapi.com/crm/v3/objects/tasks",
         headers={
@@ -497,7 +543,7 @@ Revenue: {assessment.get('company_profile', {}).get('revenue_range', '')}"""
         },
         json=payload
     )
-    
+
     if response.status_code in [200, 201]:
         log.info(f"HubSpot task created for {contact.get('name')}")
     else:
@@ -578,29 +624,29 @@ def process_company(company):
 
         # Step 1 — Manus research
         task_id = create_manus_task(company)
-        
+
         # Step 2 — Poll until complete
         research = poll_manus_until_complete(task_id, timeout=900)
-        
+
         # Step 3 — Claude qualification
         assessment = claude_qualify(company, research)
-        
+
         # Step 4 — Check fit score
         if not assessment.get('fit_score'):
             log.error(f"Skipping {company_name} — fit score missing")
             return False
-        
+
         log.info(f"{company_name} scored {assessment['fit_score']} — creating HubSpot records")
-        
+
         # Get rep ONCE per company — both contacts go to same rep
-        rep_id = get_next_rep()
+        rep_id = get_rep_for_company(company)
 
         # Step 5 — Create Contact 1 (from Apollo — always)
         contact_1 = assessment['decision_makers'][0]
         contact_id_1 = create_hubspot_contact(contact_1, assessment, company, rep_id)
         if contact_id_1:
             create_hubspot_task(contact_id_1, contact_1, assessment, company, rep_id)
-        
+
         # Step 6 — Create Contact 2 (from Manus — only if found)
         second = assessment.get('second_contact', {})
         if second.get('found') and second.get('name'):
@@ -611,9 +657,9 @@ def process_company(company):
                 create_hubspot_task(contact_id_2, second, assessment, company, rep_id)
         else:
             log.info(f"No second contact found for {company_name} — skipping")
-        
+
         return True
-        
+
     except Exception as e:
         log.error(f"Failed to process {company_name}: {str(e)}")
         return False
@@ -621,12 +667,12 @@ def process_company(company):
 # --- MAIN ---
 if __name__ == "__main__":
     log.info("SDR Agent starting...")
-    
+
     filename = 'birchmount-apollo-contacts.csv'
     companies, all_rows = get_unprocessed_companies(filename, limit=30)
-    
+
     log.info(f"Found {len(companies)} unprocessed companies")
-    
+
     success_count = 0
     error_count = 0
     exists_count = 0

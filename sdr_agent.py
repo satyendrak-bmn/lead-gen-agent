@@ -5,7 +5,7 @@ import json
 import time
 import logging
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # Read Contact and Company data from Apollo export CSV
 def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=50):
@@ -593,6 +593,60 @@ def get_associated_object_ids(from_object_type, object_id, to_object_type):
 
     return [r['toObjectId'] for r in response.json().get('results', [])]
 
+def get_object_properties(object_type, object_id, properties):
+    """Fetch specific properties for a HubSpot object"""
+    response = requests.get(
+        f"https://api.hubapi.com/crm/v3/objects/{object_type}/{object_id}",
+        headers={"Authorization": f"Bearer {HUBSPOT_API_KEY}"},
+        params={"properties": ",".join(properties)}
+    )
+
+    if response.status_code != 200:
+        log.error(f"HubSpot property fetch failed for {object_type}/{object_id}: {response.text}")
+        return {}
+
+    return response.json().get('properties', {})
+
+# Deal stage values that count as "closed" — no need to pursue further
+CLOSED_DEAL_STAGES = {"closedwon", "closedlost", "77738423"}
+
+# How recent counts as "sales rep already working this" for an open deal
+ACTIVITY_RECENCY_DAYS = 60
+
+def company_deal_status_blocks_research(company_id, company_name):
+    """Check the company's associated deals.
+    - Any deal in a closed stage -> block further research.
+    - An open deal where the company was last modified within the last
+      ACTIVITY_RECENCY_DAYS days -> block (rep is already engaged).
+    - No deals, or an open deal with no recent activity -> don't block."""
+    deal_ids = get_associated_object_ids("companies", company_id, "deals")
+    if not deal_ids:
+        return False
+
+    has_open_deal = False
+    for deal_id in deal_ids:
+        props = get_object_properties("deals", deal_id, ["dealstage"])
+        stage = props.get('dealstage', '')
+        if stage in CLOSED_DEAL_STAGES:
+            log.info(f"{company_name} has a closed deal (stage: {stage}) — skipping")
+            return True
+        has_open_deal = True
+
+    if has_open_deal:
+        props = get_object_properties("companies", company_id, ["hs_lastmodifieddate"])
+        last_modified = props.get('hs_lastmodifieddate', '')
+        if last_modified:
+            try:
+                last_modified_dt = datetime.fromisoformat(last_modified.replace('Z', '+00:00'))
+                cutoff = datetime.now(timezone.utc) - timedelta(days=ACTIVITY_RECENCY_DAYS)
+                if last_modified_dt >= cutoff:
+                    log.info(f"{company_name} has an open deal with activity within {ACTIVITY_RECENCY_DAYS} days (last modified: {last_modified}) — skipping, rep already engaged")
+                    return True
+            except ValueError:
+                log.error(f"Could not parse hs_lastmodifieddate for {company_name}: {last_modified}")
+
+    return False
+
 def company_has_contact_and_task(company_name):
     """Check HubSpot for an existing company that already has an associated contact with an associated task"""
     company_id = find_hubspot_company(company_name)
@@ -610,7 +664,11 @@ def company_has_contact_and_task(company_name):
             log.info(f"{company_name} already exists in HubSpot with contact {contact_id} and task {task_ids[0]} — skipping")
             return True
 
-    log.info(f"{company_name} exists in HubSpot with contact(s) but no associated task — proceeding")
+    log.info(f"{company_name} exists in HubSpot with contact(s) but no associated task — checking deal status")
+    if company_deal_status_blocks_research(company_id, company_name):
+        return True
+
+    log.info(f"{company_name} — no blocking deal status found — proceeding with research")
     return False
 
 def process_company(company):

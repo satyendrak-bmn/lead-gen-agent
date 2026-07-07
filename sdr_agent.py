@@ -28,7 +28,7 @@ def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=50):
         
         if company_name in processed:
             continue
-        if row.get('Proceed', '').strip().lower() == 'done':
+        if row.get('Proceed', '').strip().lower() in ('done', 'exists'):
             continue
         
         company = {
@@ -57,24 +57,24 @@ def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=50):
     
     return companies, all_rows
 
-def mark_company_processed(filename, all_rows, row_index):
-    """Mark company as done in both processed.txt and CSV"""
+def mark_company_processed(filename, all_rows, row_index, status='done'):
+    """Mark company as done/exists in both processed.txt and CSV"""
     company_name = all_rows[row_index].get('Company Name', '')
-    
+
     # Update processed.txt
     with open('processed.txt', 'a', encoding='utf-8') as f:
         f.write(company_name + '\n')
-    
+
     # Update CSV Proceed column
-    all_rows[row_index]['Proceed'] = 'done'
-    
+    all_rows[row_index]['Proceed'] = status
+
     if all_rows:
         with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=all_rows[0].keys())
             writer.writeheader()
             writer.writerows(all_rows)
-    
-    log.info(f"Marked {company_name} as processed")
+
+    log.info(f"Marked {company_name} as {status}")
 
 # Setup logging
 logging.basicConfig(
@@ -503,11 +503,79 @@ Revenue: {assessment.get('company_profile', {}).get('revenue_range', '')}"""
     else:
         log.error(f"HubSpot task creation failed: {response.text}")
 
+def find_hubspot_company(company_name):
+    """Search HubSpot for a company by exact name match. Returns company_id or None."""
+    if not company_name:
+        return None
+
+    payload = {
+        "filterGroups": [{
+            "filters": [{
+                "propertyName": "name",
+                "operator": "EQ",
+                "value": company_name
+            }]
+        }],
+        "limit": 1
+    }
+
+    response = requests.post(
+        "https://api.hubapi.com/crm/v3/objects/companies/search",
+        headers={
+            "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json=payload
+    )
+
+    if response.status_code != 200:
+        log.error(f"HubSpot company search failed for {company_name}: {response.text}")
+        return None
+
+    results = response.json().get('results', [])
+    return results[0]['id'] if results else None
+
+def get_associated_object_ids(from_object_type, object_id, to_object_type):
+    """Get IDs of objects associated with a HubSpot object (v4 associations API)"""
+    response = requests.get(
+        f"https://api.hubapi.com/crm/v4/objects/{from_object_type}/{object_id}/associations/{to_object_type}",
+        headers={"Authorization": f"Bearer {HUBSPOT_API_KEY}"}
+    )
+
+    if response.status_code != 200:
+        return []
+
+    return [r['toObjectId'] for r in response.json().get('results', [])]
+
+def company_has_contact_and_task(company_name):
+    """Check HubSpot for an existing company that already has an associated contact with an associated task"""
+    company_id = find_hubspot_company(company_name)
+    if not company_id:
+        return False
+
+    contact_ids = get_associated_object_ids("companies", company_id, "contacts")
+    if not contact_ids:
+        log.info(f"{company_name} exists in HubSpot (ID: {company_id}) but has no associated contacts")
+        return False
+
+    for contact_id in contact_ids:
+        task_ids = get_associated_object_ids("contacts", contact_id, "tasks")
+        if task_ids:
+            log.info(f"{company_name} already exists in HubSpot with contact {contact_id} and task {task_ids[0]} — skipping")
+            return True
+
+    log.info(f"{company_name} exists in HubSpot with contact(s) but no associated task — proceeding")
+    return False
+
 def process_company(company):
     """Full pipeline for one company with error handling"""
     company_name = company.get('name', 'Unknown')
-    
+
     try:
+        # Step 0 — Skip if company already exists in HubSpot with a contact and task
+        if company_has_contact_and_task(company_name):
+            return 'exists'
+
         # Step 1 — Manus research
         task_id = create_manus_task(company)
         
@@ -561,13 +629,17 @@ if __name__ == "__main__":
     
     success_count = 0
     error_count = 0
-    
+    exists_count = 0
+
     for company in companies:
-        success = process_company(company)
-        if success:
+        result = process_company(company)
+        if result == 'exists':
+            exists_count += 1
+            mark_company_processed(filename, all_rows, company['row_index'], status='Exists')
+        elif result:
             success_count += 1
-            mark_company_processed(filename, all_rows, company['row_index'])
+            mark_company_processed(filename, all_rows, company['row_index'], status='done')
         else:
             error_count += 1
-    
-    log.info(f"Run complete — {success_count} succeeded, {error_count} failed")
+
+    log.info(f"Run complete — {success_count} succeeded, {exists_count} already existed, {error_count} failed")

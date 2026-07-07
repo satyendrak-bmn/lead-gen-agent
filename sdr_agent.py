@@ -589,6 +589,7 @@ def get_associated_object_ids(from_object_type, object_id, to_object_type):
     )
 
     if response.status_code != 200:
+        log.error(f"HubSpot associations lookup failed for {from_object_type}/{object_id} -> {to_object_type}: {response.text}")
         return []
 
     return [r['toObjectId'] for r in response.json().get('results', [])]

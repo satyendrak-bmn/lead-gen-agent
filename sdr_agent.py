@@ -614,14 +614,21 @@ CLOSED_DEAL_STAGES = {"closedwon", "closedlost", "77738423"}
 # How recent counts as "sales rep already working this" for an open deal
 ACTIVITY_RECENCY_DAYS = 60
 
-def company_deal_status_blocks_research(company_id, company_name):
-    """Check the company's associated deals.
+def company_deal_status_blocks_research(company_id, company_name, contact_ids=None):
+    """Check deals associated with the company. Deals may be linked directly to
+    the company record, or only to a contact (common when a deal is created
+    without an explicit company association) — both sources are checked.
     - Any deal in a closed stage -> block further research.
     - An open deal where the company was last modified within the last
       ACTIVITY_RECENCY_DAYS days -> block (rep is already engaged).
     - No deals, or an open deal with no recent activity -> don't block."""
-    deal_ids = get_associated_object_ids("companies", company_id, "deals")
+    deal_ids = set(get_associated_object_ids("companies", company_id, "deals"))
+
+    for contact_id in (contact_ids or []):
+        deal_ids.update(get_associated_object_ids("contacts", contact_id, "deals"))
+
     if not deal_ids:
+        log.info(f"{company_name} has no associated deals (checked company and contact associations)")
         return False
 
     has_open_deal = False
@@ -670,7 +677,7 @@ def company_has_contact_and_task(company_name):
             return True
 
     log.info(f"{company_name} exists in HubSpot with contact(s) but no associated task — checking deal status")
-    if company_deal_status_blocks_research(company_id, company_name):
+    if company_deal_status_blocks_research(company_id, company_name, contact_ids):
         return True
 
     log.info(f"{company_name} — no blocking deal status found — proceeding with research")

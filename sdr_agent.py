@@ -625,10 +625,14 @@ def company_deal_status_blocks_research(company_id, company_name):
 
     has_open_deal = False
     for deal_id in deal_ids:
-        props = get_object_properties("deals", deal_id, ["dealstage"])
+        props = get_object_properties("deals", deal_id, ["dealstage", "hs_is_closed"])
         stage = props.get('dealstage', '')
-        if stage in CLOSED_DEAL_STAGES:
-            log.info(f"{company_name} has a closed deal (stage: {stage}) — skipping")
+        # hs_is_closed is HubSpot's own computed flag — true for any closed-won/
+        # closed-lost stage regardless of pipeline or custom stage IDs. Also check
+        # the explicit stage ID list as a backup for edge cases.
+        is_closed = str(props.get('hs_is_closed', '')).lower() == 'true' or stage in CLOSED_DEAL_STAGES
+        if is_closed:
+            log.info(f"{company_name} has a closed deal (stage: {stage}, hs_is_closed: {props.get('hs_is_closed')}) — skipping")
             return True
         has_open_deal = True
 

@@ -8,7 +8,7 @@ import csv
 from datetime import datetime, timedelta, timezone
 
 # Read Contact and Company data from Apollo export CSV
-def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=50):
+def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=105):
     """Read unprocessed contacts from CSV"""
     processed = set()
     try:
@@ -739,7 +739,7 @@ if __name__ == "__main__":
     log.info("SDR Agent starting...")
 
     filename = 'birchmount-apollo-contacts.csv'
-    companies, all_rows = get_unprocessed_companies(filename, limit=30)
+    companies, all_rows = get_unprocessed_companies(filename, limit=105)
 
     log.info(f"Found {len(companies)} unprocessed companies")
 

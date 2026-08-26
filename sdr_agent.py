@@ -5,32 +5,48 @@ import json
 import time
 import logging
 import csv
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta, timezone
 
 # Read Contact and Company data from Apollo export CSV
-def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=105):
-    """Read unprocessed contacts from CSV"""
+def get_unprocessed_companies(sheet_name='apollo-contacts-export', limit=50):
+    """Read unprocessed contacts from Google Sheets"""
+    log.info(f"Connecting to Google Sheets: {sheet_name}")
+    
+    # Connect to Google Sheets
+    scope = [
+        'https://spreadsheets.google.com/feeds',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    
+    creds = Credentials.from_service_account_file(
+        'google_credentials.json',
+        scopes=scope
+    )
+    
+    client = gspread.authorize(creds)
+    sheet = client.open(sheet_name).sheet1
+    all_rows = sheet.get_all_records()
+    
+    # Load processed companies
     processed = set()
     try:
         with open('processed.txt', 'r', encoding='utf-8') as f:
             processed = set(line.strip() for line in f)
     except FileNotFoundError:
         pass
-
+    
     companies = []
-
-    with open(filename, 'r', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        all_rows = list(reader)
-
+    
     for i, row in enumerate(all_rows):
         company_name = row.get('Company Name', '')
-
+        
         if company_name in processed:
             continue
-        if row.get('Proceed', '').strip().lower() in ('done', 'exists'):
+        if str(row.get('Proceed', '')).strip().lower() == 'done':
             continue
-
+        
         company = {
             'first_name': row.get('First Name', ''),
             'last_name': row.get('Last Name', ''),
@@ -47,37 +63,32 @@ def get_unprocessed_companies(filename='apollo-contacts-export.csv', limit=105):
             'technologies': row.get('Technologies', ''),
             'linkedin_company': row.get('Company Linkedin Url', ''),
             'phone': row.get('Work Direct Phone', ''),
-            'company_state': row.get('Company State', ''),
-            'company_country': row.get('Company Country', ''),
-            'assigned_rep': row.get('Assigned_Rep', '').strip(),  # NEW
-            'row_index': i
+            'assigned_rep': str(row.get('Assigned_Rep', '')).strip(),
+            'row_index': i + 2  # +2 because row 1 is header, gspread is 1-indexed
         }
-
+        
         companies.append(company)
-
+        
         if len(companies) >= limit:
             break
+    
+    return companies, sheet
 
-    return companies, all_rows
-
-def mark_company_processed(filename, all_rows, row_index, status='done'):
-    """Mark company as done/exists in both processed.txt and CSV"""
-    company_name = all_rows[row_index].get('Company Name', '')
-
+def mark_company_processed(sheet, row_index, company_name):
+    """Mark company as done in Google Sheet and processed.txt"""
+    
     # Update processed.txt
     with open('processed.txt', 'a', encoding='utf-8') as f:
         f.write(company_name + '\n')
-
-    # Update CSV Proceed column
-    all_rows[row_index]['Proceed'] = status
-
-    if all_rows:
-        with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
-            writer = csv.DictWriter(f, fieldnames=all_rows[0].keys())
-            writer.writeheader()
-            writer.writerows(all_rows)
-
-    log.info(f"Marked {company_name} as {status}")
+    
+    # Find Proceed column number
+    headers = sheet.row_values(1)
+    try:
+        proceed_col = headers.index('Proceed') + 1  # 1-indexed
+        sheet.update_cell(row_index, proceed_col, 'done')
+        log.info(f"Marked {company_name} as processed in Google Sheet")
+    except ValueError:
+        log.error("Proceed column not found in sheet")
 
 # Setup logging
 logging.basicConfig(
@@ -743,25 +754,26 @@ def process_company(company):
 # --- MAIN ---
 if __name__ == "__main__":
     log.info("SDR Agent starting...")
-
-    filename = 'birchmount-apollo-contacts.csv'
-    companies, all_rows = get_unprocessed_companies(filename, limit=105)
-
+    
+    companies, sheet = get_unprocessed_companies('birchmount-apollo-contacts', limit=50)
+    
     log.info(f"Found {len(companies)} unprocessed companies")
-
+    
     success_count = 0
     error_count = 0
-    exists_count = 0
-
+    
     for company in companies:
-        result = process_company(company)
-        if result == 'exists':
-            exists_count += 1
-            mark_company_processed(filename, all_rows, company['row_index'], status='Exists')
-        elif result:
-            success_count += 1
-            mark_company_processed(filename, all_rows, company['row_index'], status='done')
-        else:
+        try:
+            success = process_company(company)
+            if success:
+                success_count += 1
+                mark_company_processed(sheet, company['row_index'], company['name'])
+            else:
+                error_count += 1
+        except Exception as e:
+            if 'MANUS_OUT_OF_CREDITS' in str(e):
+                log.error("Manus credits exhausted — stopping run")
+                break
             error_count += 1
-
-    log.info(f"Run complete — {success_count} succeeded, {exists_count} already existed, {error_count} failed")
+    
+    log.info(f"Run complete — {success_count} succeeded, {error_count} failed")

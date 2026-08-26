@@ -1,0 +1,4 @@
+.env
+*.log
+sdr_agent.log
+google_credentials.json
